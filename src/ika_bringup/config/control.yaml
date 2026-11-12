@@ -16,9 +16,14 @@ mode_manager_node:
 
 line_follower_node:
   ros__parameters:
+    # Robotta sahada ayarlanmış değerler (0/1 konumla). Analog konum (#27) için
+    # benzetimde ayarlanan takım robotta henüz denenmedi; denemek için:
+    #   speed 0.30, kp 50.0, kd 8.0, d_filter 0.5, max_angular 4.0,
+    #   min_speed_ratio 0.4, half_width 0.025, search_angular 1.2, lost_timeout 3.0
     speed: 0.10
     kp: 30.0                         # [rad/s / m]
     kd: 0.6
+    d_filter: 0.0                    # türevi alçak geçirgenle yumuşatır (0 = kapalı)
     max_angular: 2.5
     min_speed_ratio: 0.3             # en keskin hatada hızın kalacağı oran
     half_width: 0.03                 # bu hatada hız min_speed_ratio'ya iner
