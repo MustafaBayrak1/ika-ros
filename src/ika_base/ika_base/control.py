@@ -138,3 +138,47 @@ class StallGuard:
         else:
             self.elapsed = 0.0
         return self.tripped
+
+
+class HeadingHold:
+    """Düz sürüşte (dönüş komutu yokken) robotun yönünü jiroskopla korur (saf mantık).
+
+    Her teker kendi hızına ayrı ayarlanır; robotun yönünü ise hiçbir şey
+    tutmuyordu. Kalkışta bir tekerin önce kurtulması, çap/zemin farkı ve duruş
+    farkı birikip robotu birkaç derece döndürüyordu. Komutta dönüş yokken ve
+    |v| >= min_speed iken, tuşa basıldığı andaki yön hedef alınır:
+
+        w = -(kp * hata + ki * ∫hata + kd * dönme_hızı)    (|w| <= max_w)
+
+    kd terimi (doğrudan jiroskoptan) salınımı söndürür; yalnız kp ile tekerlerin
+    gecikmesi yüzünden robot sağa sola yalpalıyordu. Dönüş komutu gelince ya da
+    robot durunca bırakır; bir sonraki düz sürüş yeni yönü hedef alır.
+    """
+
+    def __init__(self, kp: float, kd: float, max_w: float, ki: float = 0.0,
+                 i_limit: float = 0.15, min_speed: float = 0.02):
+        self.kp = kp
+        self.kd = kd
+        self.ki = ki
+        self.max_w = max_w
+        self.i_limit = i_limit      # integral teriminin en fazla katkısı [rad/s]
+        self.min_speed = min_speed
+        self.reset()
+
+    def reset(self):
+        self.ref = None
+        self.integral = 0.0
+
+    def update(self, v: float, w: float, yaw, rate: float, dt: float) -> float:
+        """Düzeltilmiş w döner. yaw None ise (jiroskop yok/bayat) komuta dokunmaz."""
+        if abs(w) > 1e-3 or abs(v) < self.min_speed or yaw is None:
+            self.reset()
+            return w
+        if self.ref is None:
+            self.ref = yaw
+        error = math.atan2(math.sin(yaw - self.ref), math.cos(yaw - self.ref))
+        if self.ki > 0.0:
+            bound = self.i_limit / self.ki
+            self.integral = max(-bound, min(bound, self.integral + error * dt))
+        out = -(self.kp * error + self.ki * self.integral + self.kd * rate)
+        return max(-self.max_w, min(self.max_w, out))

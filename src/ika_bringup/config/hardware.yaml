@@ -57,6 +57,13 @@ ika_base_node:
       duty: 70.0                     # (enkoder susmuş/olay kaçırıyor ya da teker sıkışmış). 0: kapalı
       speed: 0.03
       time: 0.5
+    heading_hold:                    # düz sürüşte (dönüş komutu yokken) yönü jiroskopla koru
+      enabled: true
+      gyro_sign: -1.0                # kart ters takılı (robot.yaml imu.roll = pi): sola dönüş ham z'de -
+      kp: 1.5
+      ki: 0.5
+      kd: 0.3
+      max_w: 0.4
 
 line_sensor_node:
   ros__parameters:

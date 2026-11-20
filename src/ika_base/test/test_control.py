@@ -1,6 +1,6 @@
 import pytest
 
-from ika_base.control import SlewLimiter, StallGuard, WheelSpeedController
+from ika_base.control import HeadingHold, SlewLimiter, StallGuard, WheelSpeedController
 
 
 def test_slew_limiter_ramps():
@@ -48,7 +48,6 @@ def test_closed_loop_converges_on_simple_motor():
         effective = 0.0 if abs(duty) < 8 else duty
         speed += (effective / 100 * 0.45 - speed) * 0.2
     assert speed == pytest.approx(0.3, abs=0.01)
-
 
 
 @pytest.mark.parametrize('gain', [0.6, 0.7])
@@ -147,3 +146,44 @@ def test_stall_guard_disabled():
     guard = StallGuard(0.0, 0.03, 0.5)
     for _ in range(100):
         assert not guard.update(0.15, 0.0, 100.0, 0.02)
+
+
+def test_heading_hold_corrects_toward_start_heading():
+    hold = HeadingHold(1.5, 0.3, 0.4)
+    assert hold.update(0.2, 0.0, 0.10, 0.0, 0.02) == 0.0       # ilk adım: yön hedef alınır
+    assert hold.ref == pytest.approx(0.10)
+    w = hold.update(0.2, 0.0, 0.15, 0.0, 0.02)                  # 0.05 rad sola kaydı
+    assert w == pytest.approx(-1.5 * 0.05)                      # sağa düzelt
+    assert hold.update(0.2, 0.0, 0.10, 0.5, 0.02) == pytest.approx(-0.15)   # sönüm
+    assert hold.update(0.2, 0.0, 1.0, 0.0, 0.02) == pytest.approx(-0.4)     # sınır
+
+
+def test_heading_hold_releases_on_turn_stop_or_missing_gyro():
+    hold = HeadingHold(1.5, 0.3, 0.4)
+    hold.update(0.2, 0.0, 0.0, 0.0, 0.02)
+    assert hold.update(0.2, 0.8, 0.3, 0.0, 0.02) == 0.8         # A/D: komut aynen geçer
+    assert hold.ref is None
+    hold.update(0.2, 0.0, 0.3, 0.0, 0.02)
+    assert hold.ref == pytest.approx(0.3)                       # yeni düz sürüş yeni yön
+    assert hold.update(0.0, 0.0, 0.5, 0.0, 0.02) == 0.0         # durdu
+    assert hold.ref is None
+    assert hold.update(0.2, 0.0, None, 0.0, 0.02) == 0.0        # jiroskop yok
+    assert hold.update(-0.2, 0.0, 0.0, 0.0, 0.02) == 0.0        # geri giderken de tutar
+    assert hold.update(-0.2, 0.0, 0.05, 0.0, 0.02) < 0.0
+
+
+def test_heading_hold_integral_removes_steady_drift():
+    # Sağ teker %4 hızlı: yalnız kp kalıcı sapma bırakır, ki onu sıfıra çeker.
+    import math
+
+    def run(ki):
+        hold = HeadingHold(1.5, 0.3, 0.4, ki=ki)
+        yaw, vl, vr = 0.0, 0.0, 0.0
+        for _ in range(1000):
+            w = hold.update(0.2, 0.0, yaw, (vr - vl) / 0.17, 0.02)
+            vl += (0.2 - w * 0.085 - vl) * 0.08
+            vr += ((0.2 + w * 0.085) * 1.04 - vr) * 0.08
+            yaw += (vr - vl) / 0.17 * 0.02
+        return abs(math.degrees(yaw))
+    assert run(0.0) > 0.5
+    assert run(0.5) < 0.1

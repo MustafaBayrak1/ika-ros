@@ -48,6 +48,17 @@ DEFAULTS = {
     'stall.speed': 0.03,              # [m/s]
     'stall.time': 0.5,                # [s]
 
+    # Düz sürüşte yön tutma: komutta dönüş yokken jiroskopla yönü korur
+    # (control.HeadingHold). gyro_sign: jiroskop z'sinin robotun yukarı ekseniyle
+    # işareti; kart ters takılıysa (robot.yaml imu.roll = pi) -1.
+    'heading_hold.enabled': False,
+    'heading_hold.imu_topic': '/imu/data_raw',
+    'heading_hold.gyro_sign': 1.0,
+    'heading_hold.kp': 1.5,           # [rad/s / rad]
+    'heading_hold.ki': 0.5,           # [rad/s / (rad*s)]
+    'heading_hold.kd': 0.3,           # [rad/s / (rad/s)]
+    'heading_hold.max_w': 0.4,        # düzeltmenin üst sınırı [rad/s]
+
     'odom_frame': 'odom',
     'base_frame': 'base_link',
     'publish_tf': False,

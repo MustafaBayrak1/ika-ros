@@ -17,13 +17,15 @@ import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TransformStamped, Twist
+from rclpy.qos import qos_profile_sensor_data
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float32MultiArray
 from tf2_ros import TransformBroadcaster
 
 from ika_base.config import DEFAULTS
-from ika_base.control import LowPassFilter, SlewLimiter, StallGuard, WheelSpeedController
+from ika_base.control import (
+    HeadingHold, LowPassFilter, SlewLimiter, StallGuard, WheelSpeedController)
 from ika_base.drivetrain import build_drivetrain
 from ika_base.encoder import multiplier
 from ika_base.kinematics import (
@@ -63,6 +65,18 @@ class BaseNode(Node):
         self.check_time = self.get_clock().now()
         self.brake = cfg['brake_duty'] if cfg['brake_on_stop'] else 0.0
 
+        self.heading = None
+        self.imu_yaw = 0.0
+        self.imu_rate = 0.0
+        self.imu_stamp = None
+        self.imu_time = None
+        if cfg['heading_hold.enabled']:
+            self.heading = HeadingHold(
+                cfg['heading_hold.kp'], cfg['heading_hold.kd'], cfg['heading_hold.max_w'],
+                ki=cfg['heading_hold.ki'])
+            self.create_subscription(Imu, cfg['heading_hold.imu_topic'], self._on_imu,
+                                     qos_profile_sensor_data)
+
         self.cmd = Twist()
         self.cmd_time = None
         self.last_counts = self.drivetrain.counts()
@@ -92,12 +106,28 @@ class BaseNode(Node):
         self.cmd = msg
         self.cmd_time = self.get_clock().now()
 
-    def _targets(self, now):
+    def _on_imu(self, msg: Imu):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        rate = self.cfg['heading_hold.gyro_sign'] * msg.angular_velocity.z
+        if self.imu_stamp is not None and 0.0 < stamp - self.imu_stamp < 0.2:
+            self.imu_yaw += rate * (stamp - self.imu_stamp)
+        self.imu_stamp = stamp
+        self.imu_rate = rate
+        self.imu_time = self.get_clock().now()
+
+    def _targets(self, now, dt):
         fresh = (self.cmd_time is not None and
                  (now - self.cmd_time).nanoseconds * 1e-9 <= self.cfg['cmd_timeout'])
         if not fresh:
+            if self.heading is not None:
+                self.heading.reset()
             return 0.0, 0.0
-        left, right = twist_to_wheels(self.cmd.linear.x, self.cmd.angular.z, self.separation)
+        v, w = self.cmd.linear.x, self.cmd.angular.z
+        if self.heading is not None:
+            imu_ok = (self.imu_time is not None and
+                      (now - self.imu_time).nanoseconds < 200_000_000)
+            w = self.heading.update(v, w, self.imu_yaw if imu_ok else None, self.imu_rate, dt)
+        left, right = twist_to_wheels(v, w, self.separation)
         return limit_wheels(left, right, self.max_speed)
 
     def _loop(self):
@@ -108,7 +138,7 @@ class BaseNode(Node):
             return
         self.drivetrain.step(dt)
 
-        targets = self._targets(now)
+        targets = self._targets(now, dt)
         ramped = [self.ramps[i].step(targets[i], dt) for i in range(2)]
 
         counts = self.drivetrain.counts()
