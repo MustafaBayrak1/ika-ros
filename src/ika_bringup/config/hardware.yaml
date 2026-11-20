@@ -10,7 +10,8 @@
 ika_base_node:
   ros__parameters:
     motor_driver: in_in_pwm          # L298N: IN1/IN2 yön, ENA/ENB PWM (jumper'lar çıkarılmış)
-    brake_on_stop: false
+    brake_on_stop: true              # komut sıfırken iki motoru birlikte frenle (serbest kalınca
+    brake_duty: 60.0                 # biri daha uzun dönüp robotu döndürüyordu); fren gücü [%]
     pwm_period_ns: 1000000           # 1 kHz; ENB'nin epwm1 kanalı GPIO6 ile periyot paylaşır
 
     # Sol/sağ robotun arkasından, çizgi sensörüne (öne) bakarak. Bu robotta

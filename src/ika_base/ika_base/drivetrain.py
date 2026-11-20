@@ -2,6 +2,7 @@
 
     dt = build_drivetrain(cfg)      # cfg: config.DEFAULTS biçiminde sözlük
     dt.set_duty(sol, sag)           # -100..100
+    dt.set_duty(0, 0, brake=(60, 60))  # duran motorları fren gücüyle tut (brake_on_stop)
     dt.step(dt_s)                   # sadece benzetimde iş yapar
     dt.counts()                     # (sol, sag) kümülatif enkoder sayımı veya None
     dt.close()
@@ -40,22 +41,28 @@ class HBridgeMotor:
         if pin is not None:
             pin[0].set(pin[1], value)
 
-    def drive(self, duty: float):
+    def drive(self, duty: float, brake: float = 0.0):
+        """duty: -100..100. duty 0 iken brake > 0 ve brake_on_stop açıksa
+        (in_in_pwm) motor kısa devre frenine alınır: IN1 = IN2 = 1 ve PWM'e
+        fren gücü [%] verilir. L298N'de fren için EN'in yüksek olması gerekir;
+        eskiden EN %0'da kalıyor, motor fren yerine serbest dönüyordu."""
         if self._invert:
             duty = -duty
         if self._pwm is None:
             duty = math.copysign(100.0, duty) if abs(duty) >= 20.0 else 0.0
         forward, backward = duty > 0.0, duty < 0.0
+        hold = self._brake and brake > 0.0 and not (forward or backward)
         if self._mode == 'dir_pwm':
             self._set(self._in1, 1 if forward else 0)
+            hold = False
         elif forward or backward:
             self._set(self._in1, 1 if forward else 0)
             self._set(self._in2, 1 if backward else 0)
         else:
-            self._set(self._in1, 1 if self._brake else 0)
-            self._set(self._in2, 1 if self._brake else 0)
+            self._set(self._in1, 1 if hold else 0)
+            self._set(self._in2, 1 if hold else 0)
         if self._pwm is not None:
-            self._pwm.set_duty_percent(abs(duty))
+            self._pwm.set_duty_percent(min(100.0, brake) if hold else abs(duty))
 
     def close(self):
         self.drive(0.0)
@@ -131,9 +138,9 @@ class GpioDrivetrain:
             self._chips[name] = open_chip(name, backend)
         return self._chips[name]
 
-    def set_duty(self, left: float, right: float):
-        self.motors[0].drive(left)
-        self.motors[1].drive(right)
+    def set_duty(self, left: float, right: float, brake=(0.0, 0.0)):
+        self.motors[0].drive(left, brake[0])
+        self.motors[1].drive(right, brake[1])
 
     def step(self, dt: float):
         pass
@@ -172,18 +179,22 @@ class SimDrivetrain:
         self._gains = (1.0, right_gain)
         self._duty = [0.0, 0.0]
         self._speed = [0.0, 0.0]
+        self._brake = [0.0, 0.0]
         self._pos = [0.0, 0.0]
         self.counts_per_rev = self._cpr
 
-    def set_duty(self, left: float, right: float):
+    def set_duty(self, left: float, right: float, brake=(0.0, 0.0)):
         self._duty = [left, right]
+        self._brake = list(brake)
 
     def step(self, dt: float):
         for i in range(2):
             duty = self._duty[i]
             effective = 0.0 if abs(duty) < self._dead else duty
             target = effective / 100.0 * self._max_speed * self._gains[i]
-            self._speed[i] += (target - self._speed[i]) * min(1.0, dt / self._tau)
+            # Fren (duty 0 + brake): teker serbest dönüşten ~4 kat hızlı durur.
+            tau = self._tau / 4.0 if duty == 0.0 and self._brake[i] > 0.0 else self._tau
+            self._speed[i] += (target - self._speed[i]) * min(1.0, dt / tau)
             self._pos[i] += self._speed[i] * dt
 
     def counts(self):

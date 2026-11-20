@@ -12,6 +12,7 @@ DEFAULTS = {
     'backend': 'gpiod',               # gpiod | mock (donanımsız benzetim)
     'motor_driver': 'in_in_pwm',      # in_in_pwm (L298N/TB6612) | dir_pwm
     'brake_on_stop': False,
+    'brake_duty': 60.0,               # brake_on_stop: komut sıfırken fren gücü [%]
     'pwm_period_ns': 1_000_000,
 
     'left.in1': '', 'left.in2': '', 'left.pwm': '', 'left.invert': False,

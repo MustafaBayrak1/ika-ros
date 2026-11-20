@@ -34,6 +34,32 @@ def test_gpio_drivetrain_sets_direction_pins_and_pwm():
     dt.close()
 
 
+def test_brake_drives_both_inputs_high_with_pwm():
+    # L298N kısa devre freni EN'in yüksek olmasını ister: IN1 = IN2 = 1 ve PWM = fren gücü.
+    dt = GpioDrivetrain(_cfg(brake_on_stop=True), backend='mock')
+    chip = dt._chips[MOCK_CHIP]
+    dt.set_duty(0.0, 0.0, brake=(60.0, 60.0))
+    assert (chip.levels[22], chip.levels[17]) == (1, 1)
+    assert (chip.levels[24], chip.levels[25]) == (1, 1)
+    assert dt.motors[0]._pwm.duty_percent == 60.0
+    dt.set_duty(30.0, 30.0, brake=(60.0, 60.0))           # sürüş sırasında fren yok
+    assert (chip.levels[22], chip.levels[17]) == (1, 0)
+    assert dt.motors[0]._pwm.duty_percent == 30.0
+    dt.set_duty(0.0, 0.0)                                  # fren istenmedi: serbest
+    assert (chip.levels[22], chip.levels[17]) == (0, 0)
+    assert dt.motors[0]._pwm.duty_percent == 0.0
+    dt.close()
+
+
+def test_brake_ignored_when_disabled():
+    dt = GpioDrivetrain(_cfg(brake_on_stop=False), backend='mock')
+    chip = dt._chips[MOCK_CHIP]
+    dt.set_duty(0.0, 0.0, brake=(60.0, 60.0))
+    assert (chip.levels[22], chip.levels[17]) == (0, 0)
+    assert dt.motors[0]._pwm.duty_percent == 0.0
+    dt.close()
+
+
 def test_duplicate_pin_rejected():
     with pytest.raises(ValueError):
         GpioDrivetrain(_cfg(**{'right.in1': 'GPIO22'}), backend='mock')

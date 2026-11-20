@@ -61,6 +61,7 @@ class BaseNode(Node):
         self.encoder_dead = False
         self.last_errors = self.drivetrain.encoder_errors()
         self.check_time = self.get_clock().now()
+        self.brake = cfg['brake_duty'] if cfg['brake_on_stop'] else 0.0
 
         self.cmd = Twist()
         self.cmd_time = None
@@ -124,7 +125,16 @@ class BaseNode(Node):
             duties = [max(-100.0, min(100.0, self.cfg['pid.kff'] * v / self.max_speed * 100.0))
                       for v in ramped]
 
-        self.drivetrain.set_duty(duties[0], duties[1])
+        # Komut sıfırken (tuş bırakıldı, zaman aşımı, acil durdur) iki motoru da
+        # frenle: serbest kalınca biri daha uzun dönüp robotu döndürüyordu.
+        stopped = abs(targets[0]) < 1e-4 and abs(targets[1]) < 1e-4
+        brake = self.brake if stopped else 0.0
+        if brake:
+            duties = [0.0, 0.0]
+            for i in range(2):
+                self.pids[i].reset()
+                self.ramps[i].reset()
+        self.drivetrain.set_duty(duties[0], duties[1], brake=(brake, brake))
         self.loop_count += 1
         state = self.loop_count % self.state_every == 0
         self._publish(now, dist, speeds, state)
