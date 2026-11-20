@@ -13,6 +13,7 @@ tahmin edilir (yüksek kovaryansla) — yalnızca enkodersiz acil durum için.
 """
 
 import math
+import os
 
 import rclpy
 from rclpy.node import Node
@@ -58,7 +59,7 @@ class BaseNode(Node):
             cfg['pid.kp'], cfg['pid.ki'], cfg['pid.kff'], self.max_speed,
             cfg['pid.min_duty'], cfg['pid.max_duty'], cfg['pid.i_limit']) for _ in range(2)]
         self.stall_guards = [StallGuard(cfg['stall.duty'], cfg['stall.speed'], cfg['stall.time'])
-                       for _ in range(2)]
+                             for _ in range(2)]
         self.guard_tripped = False
         self.encoder_dead = False
         self.last_errors = self.drivetrain.encoder_errors()
@@ -258,9 +259,30 @@ def _diag(values, scale):
     return cov
 
 
+def _realtime():
+    """Bu süreci gerçek zamanlı öncelikle (SCHED_FIFO) çalıştırır; root gerekir.
+
+    İşlemci yükteyken (SLAM, web arayüzü, çizgi sensörü) kontrol düğümleri sırayı
+    geç alıyor, durma komutu motorlara 0.2-0.7 s geç ulaşıyordu. rclpy.init'ten
+    önce çağrılır ki DDS thread'leri de önceliği devralsın. IKA_RT_PRIORITY
+    ortam değişkeni önceliği verir (varsayılan 30), 0 kapatır. Döner: günlük notu.
+    """
+    priority = int(os.environ.get('IKA_RT_PRIORITY', '30'))
+    if priority <= 0:
+        return None
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(priority))
+    except (OSError, AttributeError) as e:
+        return f'gerçek zamanlı öncelik verilemedi ({e}); normal öncelikle çalışıyor'
+    return f'gerçek zamanlı öncelik: SCHED_FIFO {priority}'
+
+
 def main(args=None):
+    note = _realtime()
     rclpy.init(args=args)
     node = BaseNode()
+    if note:
+        node.get_logger().info(note)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

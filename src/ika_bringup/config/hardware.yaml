@@ -38,7 +38,8 @@ ika_base_node:
       mode: x4
       bias: as-is                    # enkoder kartında dahili pull-up var
       ppr: 546.0                     # Waveshare DCGM-3865: 13 PPR x 1:42, çıkış milinde
-      rt_priority: 20                # okuyucu ayrı süreçte, SCHED_FIFO önceliğiyle (0: kapalı)
+      rt_priority: 40                # okuyucu ayrı süreçte, SCHED_FIFO önceliğiyle (0: kapalı);
+                                     # kontrol düğümlerinin önceliğinden (IKA_RT_PRIORITY=30) yüksek
 
     max_wheel_speed: 0.88            # %100 duty'de teker hızı [m/s]; hw_check sweep:
                                      # sağ 0.878, sol 0.885 (küçüğü, 2026-11-06)
@@ -103,8 +104,8 @@ line_sensor_node:
 ika_imu_node:
   ros__parameters:
     spi_device: /dev/spidev0.3       # Gemstone dahili ICM-20948
-    rate: 100.0
-    calibration_samples: 300         # açılışta ~1.5 sn robotu oynatmayın
+    rate: 50.0                       # 100'de motor kontrolü (yön tutma) ve EKF boşuna işlemci yiyordu
+    calibration_samples: 300         # açılışta ~6 sn robotu oynatmayın
 
 lidar_manager_node:
   ros__parameters:

@@ -11,6 +11,7 @@ nav modundan çıkarken veya acil durdurmada Nav2 hedefleri iptal edilir.
 """
 
 import math
+import os
 import time
 
 import rclpy
@@ -22,7 +23,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import SetBool
 
-from ika_control.mux import CommandMux
+from ika_control.mux import SOURCE_OF_MODE, CommandMux, is_moving
 from ika_control.safety import corridor_gap, Footprint, LidarPose, limit_linear
 from ika_interfaces.srv import SetMode
 
@@ -113,6 +114,10 @@ class ModeManagerNode(Node):
         if self.mux.feed(source, msg.linear.x, msg.angular.z, time.monotonic()):
             self.get_logger().warn(f'teleop devraldı ({previous} modundan)')
             self._after_mode_change(previous)
+        # Aktif kaynaktan gelen durma komutu bir sonraki turu beklemeden iletilir.
+        if (SOURCE_OF_MODE.get(self.mux.mode) == source
+                and not is_moving(msg.linear.x, msg.angular.z)):
+            self._tick()
 
     def _on_scan(self, msg: LaserScan):
         self.scan = msg
@@ -168,9 +173,30 @@ class ModeManagerNode(Node):
                             self.side_margin, s.range_min, s.range_max)
 
 
+def _realtime():
+    """Bu süreci gerçek zamanlı öncelikle (SCHED_FIFO) çalıştırır; root gerekir.
+
+    İşlemci yükteyken (SLAM, web arayüzü, çizgi sensörü) kontrol düğümleri sırayı
+    geç alıyor, durma komutu motorlara 0.2-0.7 s geç ulaşıyordu. rclpy.init'ten
+    önce çağrılır ki DDS thread'leri de önceliği devralsın. IKA_RT_PRIORITY
+    ortam değişkeni önceliği verir (varsayılan 30), 0 kapatır. Döner: günlük notu.
+    """
+    priority = int(os.environ.get('IKA_RT_PRIORITY', '30'))
+    if priority <= 0:
+        return None
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(priority))
+    except (OSError, AttributeError) as e:
+        return f'gerçek zamanlı öncelik verilemedi ({e}); normal öncelikle çalışıyor'
+    return f'gerçek zamanlı öncelik: SCHED_FIFO {priority}'
+
+
 def main(args=None):
+    note = _realtime()
     rclpy.init(args=args)
     node = ModeManagerNode()
+    if note:
+        node.get_logger().info(note)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

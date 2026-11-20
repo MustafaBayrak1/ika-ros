@@ -21,7 +21,8 @@ DEFAULTS = {
     'encoder.mode': 'x4',             # x4 | x2 | none
     'encoder.bias': 'as-is',          # as-is | pull-up | pull-down | disabled
     'encoder.ppr': 0.0,               # A kanalı darbe / TEKER (çıkış mili) turu
-    'encoder.rt_priority': 20,        # okuyucu sürecin SCHED_FIFO önceliği (0: kapalı)
+    'encoder.rt_priority': 40,        # okuyucu sürecin SCHED_FIFO önceliği (0: kapalı);
+                                      # kontrol döngüsünün IKA_RT_PRIORITY'sinden (30) yüksek olmalı
     'left.enc_a': '', 'left.enc_b': '', 'left.enc_invert': False,
     'right.enc_a': '', 'right.enc_b': '', 'right.enc_invert': False,
 
