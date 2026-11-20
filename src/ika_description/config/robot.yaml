@@ -8,9 +8,14 @@
 #
 # DİKKAT: Değerler yer tutucudur, yeni şasi üzerinde ölçülmeli.
 
-wheel_radius: 0.0425       # Orta Boy Arazi Tekerleği 85 mm; lastik yük altında
-                           # ezildiği için 1 m düz sürüş testiyle düzeltin
-wheel_separation: 0.17     # YER TUTUCU: iki teker ortası arası (temas noktaları) ölçülecek
+wheel_radius: 0.04163      # ETKİN yuvarlanma yarıçapı: lastik yük altında ezildiği için
+                           # geometrik değerden (85 mm teker, r = 0.0425) küçüktür. 2026-11-20,
+                           # pil robotun altında: yerde 3 × 2 m düz sürüş, şerit metre /
+                           # odometri = 0.9795 (±%0.5). Pil yeri, teker ya da zemin değişirse
+                           # 1–2 m düz sürüş testiyle yeniden ölçün (docs/saha-testi.md, 6).
+wheel_separation: 0.1953   # ETKİN teker arası: 2026-11-20 yerinde 5 tur, jiroskopla karşılaştırma
+                           # (teker odometrisi eski 0.17 ile %17.5 fazla dönüş sayıyordu). Yerinde
+                           # dönerken lastikler kaydığı için cetvelle ölçülenden büyük olabilir.
 wheel_width: 0.038
 
 chassis:                   # lidar freni de bu ölçüleri kullanır (gövde ayak izi)
