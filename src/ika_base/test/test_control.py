@@ -1,6 +1,6 @@
 import pytest
 
-from ika_base.control import SlewLimiter, WheelSpeedController
+from ika_base.control import SlewLimiter, StallGuard, WheelSpeedController
 
 
 def test_slew_limiter_ramps():
@@ -68,3 +68,33 @@ def test_turn_survives_measurement_dropout():
         dl = left.update(0.30, 0.0, 0.02)
         dr = right.update(0.50, 0.0, 0.02)
     assert dr - dl > 10.0
+
+
+def test_stall_guard_trips_when_duty_high_but_wheel_still():
+    guard = StallGuard(70.0, 0.03, 0.5)
+    for _ in range(24):                              # 0.48 s: henüz değil
+        assert not guard.update(0.15, 0.0, 86.0, 0.02)
+    assert guard.update(0.15, 0.0, 86.0, 0.02)       # 0.5 s
+    # Motor kesilince duty düşse de komut bırakılana kadar kapalı kalır.
+    assert guard.update(0.15, 0.0, 0.0, 0.02)
+    assert not guard.update(0.0, 0.0, 0.0, 0.02)     # komut bırakıldı
+    assert not guard.update(0.15, 0.0, 86.0, 0.02)   # yeniden sayım baştan
+
+
+def test_stall_guard_ignores_moving_wheel_and_low_duty():
+    guard = StallGuard(70.0, 0.03, 0.5)
+    for _ in range(100):
+        assert not guard.update(0.5, 0.45, 95.0, 0.02)   # hızlı ama dönüyor
+        assert not guard.update(0.15, 0.0, 40.0, 0.02)   # duran ama düşük duty
+    # Ara ara dönen teker süreyi sıfırlar.
+    for _ in range(20):
+        guard.update(0.15, 0.0, 86.0, 0.02)
+    guard.update(0.15, 0.2, 86.0, 0.02)
+    for _ in range(20):
+        assert not guard.update(0.15, 0.0, 86.0, 0.02)
+
+
+def test_stall_guard_disabled():
+    guard = StallGuard(0.0, 0.03, 0.5)
+    for _ in range(100):
+        assert not guard.update(0.15, 0.0, 100.0, 0.02)

@@ -37,6 +37,7 @@ ika_base_node:
       mode: x4
       bias: as-is                    # enkoder kartında dahili pull-up var
       ppr: 546.0                     # Waveshare DCGM-3865: 13 PPR x 1:42, çıkış milinde
+      rt_priority: 20                # okuyucu ayrı süreçte, SCHED_FIFO önceliğiyle (0: kapalı)
 
     max_wheel_speed: 0.88            # %100 duty'de teker hızı [m/s]; hw_check sweep:
                                      # sağ 0.878, sol 0.885 (küçüğü, 2026-11-06)
@@ -51,6 +52,10 @@ ika_base_node:
       min_duty: 30.0                 # havada %20–25 kalkıyor; yerde dönüşte iç teker %20de duruyordu (2026-11-09)
       max_duty: 100.0
       i_limit: 60.0                  # integral katkısı sınırı [%]; 30'da tırtıklı lastik virajda dönemiyordu (2026-11-09)
+    stall:                           # duty >= %70 iken teker 0.5 s dönmüyorsa motorları kes
+      duty: 70.0                     # (enkoder susmuş/olay kaçırıyor ya da teker sıkışmış). 0: kapalı
+      speed: 0.03
+      time: 0.5
 
 line_sensor_node:
   ros__parameters:

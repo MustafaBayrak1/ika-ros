@@ -23,7 +23,7 @@ from std_msgs.msg import Float32MultiArray
 from tf2_ros import TransformBroadcaster
 
 from ika_base.config import DEFAULTS
-from ika_base.control import LowPassFilter, SlewLimiter, WheelSpeedController
+from ika_base.control import LowPassFilter, SlewLimiter, StallGuard, WheelSpeedController
 from ika_base.drivetrain import build_drivetrain
 from ika_base.encoder import multiplier
 from ika_base.kinematics import (
@@ -55,6 +55,12 @@ class BaseNode(Node):
         self.pids = [WheelSpeedController(
             cfg['pid.kp'], cfg['pid.ki'], cfg['pid.kff'], self.max_speed,
             cfg['pid.min_duty'], cfg['pid.max_duty'], cfg['pid.i_limit']) for _ in range(2)]
+        self.stall_guards = [StallGuard(cfg['stall.duty'], cfg['stall.speed'], cfg['stall.time'])
+                       for _ in range(2)]
+        self.guard_tripped = False
+        self.encoder_dead = False
+        self.last_errors = self.drivetrain.encoder_errors()
+        self.check_time = self.get_clock().now()
 
         self.cmd = Twist()
         self.cmd_time = None
@@ -111,6 +117,7 @@ class BaseNode(Node):
             dist = [counts_to_distance(d, self.cpr, self.radius) for d in deltas]
             speeds = [self.filters[i].step(dist[i] / dt) for i in range(2)]
             duties = [self.pids[i].update(ramped[i], speeds[i], dt) for i in range(2)]
+            duties = self._protect(now, targets, speeds, duties, dt)
         else:
             dist = [ramped[i] * dt for i in range(2)]
             speeds = list(ramped)
@@ -124,6 +131,37 @@ class BaseNode(Node):
         if state:
             self.debug_pub.publish(Float32MultiArray(data=[
                 ramped[0], speeds[0], duties[0], ramped[1], speeds[1], duties[1]]))
+
+    def _protect(self, now, targets, speeds, duties, dt):
+        """Hız ölçümüne güvenilemiyorsa motorları keser (bkz. StallGuard)."""
+        if (now - self.check_time).nanoseconds >= 2_000_000_000:
+            self.check_time = now
+            if not self.encoder_dead and not self.drivetrain.encoder_alive():
+                self.encoder_dead = True
+                self.get_logger().error(
+                    'enkoder okuyucu süreç durdu: motorlar kesildi, servisi yeniden başlatın')
+            errors = self.drivetrain.encoder_errors()
+            lost = [errors[i] - self.last_errors[i] for i in range(2)]
+            self.last_errors = errors
+            if any(lost):
+                self.get_logger().warn(
+                    f'enkoder olay kaybı (son 2 s): sol {lost[0]}, sağ {lost[1]}; '
+                    'işlemci yükü yüksek olabilir')
+        tripped = [self.stall_guards[i].update(targets[i], speeds[i], duties[i], dt) for i in range(2)]
+        if self.encoder_dead or any(tripped):
+            if any(tripped) and not self.guard_tripped:
+                sides = ', '.join(name for name, t in zip(('sol', 'sağ'), tripped) if t)
+                self.get_logger().error(
+                    f'{sides} teker: duty %{max(abs(d) for d in duties):.0f} iken hız '
+                    f'{min(abs(v) for v in speeds):.2f} m/s; motorlar kesildi '
+                    '(enkoder sayım vermiyor ya da teker sıkıştı). Komutu bırakıp yeniden deneyin.')
+            self.guard_tripped = any(tripped)
+            for i in range(2):
+                self.pids[i].reset()
+                self.ramps[i].reset()
+            return [0.0, 0.0]
+        self.guard_tripped = False
+        return duties
 
     def _publish(self, now, dist, speeds, state):
         pose = self.odometry.update(dist[0], dist[1])

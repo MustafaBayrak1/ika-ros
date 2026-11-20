@@ -11,9 +11,17 @@
 
 Yön kuralı: ileri dönüşte A, B'den önce gelir (00 -> 10 -> 11 -> 01).
 Tersi ölçülüyorsa ilgili enkoder için invert: true verin.
+
+Gerçek donanımda okuyucu ayrı bir süreçte çalışır (ProcessEncoderReader):
+aynı süreçteki ROS döngüsüyle GIL'i paylaşan okuma thread'i yükte geri
+kalıyor, kernel olay tamponu (1024) taşıyor ve x4 sayımı çöp oluyordu.
 """
 
+import ctypes
+import multiprocessing
+import os
 import select
+import signal
 import threading
 import time
 
@@ -186,3 +194,103 @@ class EncoderReader:
             thread.join(timeout=1.0)
         for req in self._requests:
             req.release()
+
+
+# Alt süreç her bu kadar saniyede sayımları paylaşılan belleğe yazar.
+_PUBLISH_PERIOD = 0.002
+_START_TIMEOUT = 20.0
+_PR_SET_PDEATHSIG = 1
+
+
+def _reader_main(open_chip, encoders, mode, bias, rt_priority, shared, conn, stop):
+    """ProcessEncoderReader'ın alt süreci: EncoderReader'ı çalıştırır,
+    sayım + hata değerlerini `shared`'a ([sayımlar..., hatalar...]) yazar."""
+    parent = os.getppid()
+    try:
+        # Ana süreç (ika_base_node) ölürse bu süreç de ölsün; yoksa GPIO
+        # hatlarını tutup servisin yeniden başlamasını engeller.
+        ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
+    except (OSError, AttributeError):
+        pass
+    # Sinyal işleyicide stop.set() çağrılmaz: Event'in kilidi o an tutuluyor
+    # olabilir; düz bir bayrak yeterli.
+    terminated = []
+    signal.signal(signal.SIGTERM, lambda *_: terminated.append(True))
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    note = None
+    if rt_priority > 0:
+        # Okuma thread'i bu ayarı devralır: başka süreçler onu bekletemez.
+        try:
+            os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(rt_priority))
+        except (OSError, AttributeError) as e:
+            note = f'enkoder okuyucuya gerçek zamanlı öncelik verilemedi ({e})'
+    try:
+        reader = EncoderReader(open_chip, encoders, mode=mode, bias=bias)
+    except Exception as e:  # noqa: BLE001 - hatayı ana sürece taşı
+        conn.send(('error', f'{type(e).__name__}: {e}'))
+        return
+    n = len(encoders)
+    try:
+        conn.send(('ok', note))
+        while not terminated and not stop.is_set() and os.getppid() == parent:
+            shared[:n] = reader.counts()
+            shared[n:] = reader.errors()
+            time.sleep(_PUBLISH_PERIOD)
+    finally:
+        reader.close()
+
+
+class ProcessEncoderReader:
+    """EncoderReader ile aynı arayüz; okuma ve çözme ayrı bir süreçte çalışır.
+
+    open_chip pickle edilebilir olmalı, ör.
+    functools.partial(ika_hal.gpio.open_chip, backend='gpiod'): alt süreç
+    'spawn' ile temiz başlar ve chip'leri kendisi açar. Sayımlar en fazla
+    birkaç ms gecikmeyle okunur. Paylaşılan dizi kilitsizdir: alt süreç
+    kilidi tutarken ölürse kontrol döngüsü kilitlenmesin (64 bit tek değer
+    okuma/yazma aarch64'te bölünmez; sol/sağ arası ms'lik fark önemsiz).
+    """
+
+    def __init__(self, open_chip, encoders, mode: str = 'x4', bias: str = 'as-is',
+                 rt_priority: int = 0):
+        ctx = multiprocessing.get_context('spawn')
+        self._n = len(encoders)
+        self._shared = ctx.RawArray('q', 2 * self._n)
+        self._stop = ctx.Event()
+        parent_conn, child_conn = ctx.Pipe(duplex=False)
+        self._proc = ctx.Process(
+            target=_reader_main, name='ika_encoder', daemon=True,
+            args=(open_chip, list(encoders), mode, bias, rt_priority,
+                  self._shared, child_conn, self._stop))
+        self._proc.start()
+        child_conn.close()
+        self.note = None
+        if not parent_conn.poll(_START_TIMEOUT):
+            self.close()
+            raise RuntimeError(f'enkoder süreci {_START_TIMEOUT:.0f} s içinde başlamadı')
+        try:
+            status, detail = parent_conn.recv()
+        except EOFError:
+            status, detail = 'error', f'enkoder süreci çıktı (kod {self._proc.exitcode})'
+        if status != 'ok':
+            self.close()
+            raise RuntimeError(f'enkoder okuyucu açılamadı: {detail}')
+        self.note = detail
+        # İlk değerler yazılana kadar bekle (counts() başlangıçta 0 döner).
+        time.sleep(4 * _PUBLISH_PERIOD)
+
+    def alive(self) -> bool:
+        return self._proc.is_alive()
+
+    def counts(self) -> list:
+        return list(self._shared[:self._n])
+
+    def errors(self) -> list:
+        return list(self._shared[self._n:])
+
+    def close(self):
+        self._stop.set()
+        self._proc.join(timeout=2.0)
+        if self._proc.is_alive():
+            self._proc.terminate()
+            self._proc.join(timeout=1.0)

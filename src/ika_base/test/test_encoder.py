@@ -1,8 +1,9 @@
+import functools
 import time
 
 import pytest
 
-from ika_base.encoder import EncoderReader, QuadratureDecoder
+from ika_base.encoder import EncoderReader, ProcessEncoderReader, QuadratureDecoder
 from ika_hal.gpio import MockChip
 
 FORWARD = [('a', 1), ('b', 1), ('a', 0), ('b', 0)]
@@ -143,3 +144,65 @@ def test_reader_orders_edges_across_chips_with_select():
         assert reader.errors() == [0]
     finally:
         reader.close()
+
+
+class _ScriptedLines:
+    """Alt süreçte oluşturulan, ilk okumada `cycles` tam ileri periyot veren kuyruk."""
+
+    def __init__(self, cycles):
+        from ika_hal.gpio import Edge
+        offsets = {'a': 1, 'b': 2}
+        self.edges = [Edge(offsets[ch], level, i) for i, (ch, level) in
+                      enumerate(FORWARD * cycles)]
+
+    def wait(self, timeout_s):
+        if self.edges:
+            return True
+        time.sleep(timeout_s)
+        return False
+
+    def read(self):
+        edges, self.edges = self.edges, []
+        return edges
+
+    def get(self, offset):
+        return 0
+
+    def release(self):
+        pass
+
+
+class _ScriptedChip:
+    def __init__(self, cycles):
+        self.cycles = cycles
+
+    def request_edges(self, offsets, bias='as-is'):
+        return _ScriptedLines(self.cycles)
+
+
+def _scripted_chip(name, cycles):
+    return _ScriptedChip(cycles)
+
+
+def _broken_chip(name):
+    raise ValueError(f'{name} yok')
+
+
+def test_process_reader_counts_in_child_process():
+    reader = ProcessEncoderReader(functools.partial(_scripted_chip, cycles=250),
+                                  [(('gpiochip9', 1), ('gpiochip9', 2), False)])
+    try:
+        assert reader.alive()
+        deadline = time.monotonic() + 5.0
+        while reader.counts()[0] != 1000 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert reader.counts() == [1000]
+        assert reader.errors() == [0]
+    finally:
+        reader.close()
+    assert not reader.alive()
+
+
+def test_process_reader_reports_open_error():
+    with pytest.raises(RuntimeError, match='gpiochip9 yok'):
+        ProcessEncoderReader(_broken_chip, [(('gpiochip9', 1), ('gpiochip9', 2), False)])

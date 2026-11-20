@@ -92,3 +92,37 @@ class LowPassFilter:
     def step(self, sample: float) -> float:
         self.value += self.alpha * (sample - self.value)
         return self.value
+
+
+class StallGuard:
+    """Duty yüksekken teker dönmüyor görünüyorsa motoru keser (saf mantık).
+
+    Ölçülen hız `time_limit` boyunca `speed_limit` altında kalırken |duty|
+    `duty_limit`'i aşarsa tetiklenir. Neden ya teker sıkışmıştır ya da hız
+    ölçümü yanlıştır (enkoder kablosu çıkmış, olaylar kaçıyor); ikincisinde
+    PI duty'yi tavana iter ve robot kontrolsüz hızlanır. Tetiklenince komut
+    bırakılana (hedef sıfıra inene) kadar kapalı kalır. duty_limit <= 0: kapalı.
+    """
+
+    def __init__(self, duty_limit: float, speed_limit: float, time_limit: float):
+        self.duty_limit = duty_limit
+        self.speed_limit = speed_limit
+        self.time_limit = time_limit
+        self.elapsed = 0.0
+        self.tripped = False
+
+    def update(self, target: float, measured: float, duty: float, dt: float) -> bool:
+        if self.duty_limit <= 0.0:
+            return False
+        if abs(target) < 1e-4:
+            self.elapsed = 0.0
+            self.tripped = False
+            return False
+        if self.tripped:
+            return True
+        if abs(duty) >= self.duty_limit and abs(measured) < self.speed_limit:
+            self.elapsed += dt
+            self.tripped = self.elapsed >= self.time_limit
+        else:
+            self.elapsed = 0.0
+        return self.tripped

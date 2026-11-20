@@ -10,9 +10,10 @@ GpioDrivetrain gerçek donanımı, SimDrivetrain (backend: mock) basit bir
 motor modeliyle enkoder üretir; üst katman ikisini ayırt etmez.
 """
 
+import functools
 import math
 
-from ika_base.encoder import EncoderReader, multiplier
+from ika_base.encoder import EncoderReader, ProcessEncoderReader, multiplier
 from ika_hal.gpio import open_chip, resolve_pin
 from ika_hal.pwm import open_pwm
 
@@ -112,9 +113,18 @@ class GpioDrivetrain:
                     raise ValueError(f'{side} enkoder pinleri (enc_a / enc_b) tanımlanmalı '
                                      "veya encoder.mode: none verilmeli")
                 encoders.append((a, b, cfg[f'{side}.enc_invert']))
-            self.encoders = EncoderReader(
-                lambda name: self._chip(name, backend), encoders,
-                mode=cfg['encoder.mode'], bias=cfg['encoder.bias'])
+            if backend == 'gpiod':
+                # Ayrı süreç: bu süreçteki ROS döngüsüyle GIL paylaşılmaz.
+                self.encoders = ProcessEncoderReader(
+                    functools.partial(open_chip, backend=backend), encoders,
+                    mode=cfg['encoder.mode'], bias=cfg['encoder.bias'],
+                    rt_priority=int(cfg['encoder.rt_priority']))
+                if self.encoders.note:
+                    self.notes.append(self.encoders.note)
+            else:
+                self.encoders = EncoderReader(
+                    lambda name: self._chip(name, backend), encoders,
+                    mode=cfg['encoder.mode'], bias=cfg['encoder.bias'])
 
     def _chip(self, name, backend):
         if name not in self._chips:
@@ -133,6 +143,10 @@ class GpioDrivetrain:
 
     def encoder_errors(self):
         return tuple(self.encoders.errors()) if self.encoders else (0, 0)
+
+    def encoder_alive(self) -> bool:
+        alive = getattr(self.encoders, 'alive', None)
+        return alive() if alive else True
 
     def close(self):
         for motor in self.motors:
@@ -178,6 +192,9 @@ class SimDrivetrain:
 
     def encoder_errors(self):
         return (0, 0)
+
+    def encoder_alive(self) -> bool:
+        return True
 
     def close(self):
         pass

@@ -20,6 +20,7 @@ DEFAULTS = {
     'encoder.mode': 'x4',             # x4 | x2 | none
     'encoder.bias': 'as-is',          # as-is | pull-up | pull-down | disabled
     'encoder.ppr': 0.0,               # A kanalı darbe / TEKER (çıkış mili) turu
+    'encoder.rt_priority': 20,        # okuyucu sürecin SCHED_FIFO önceliği (0: kapalı)
     'left.enc_a': '', 'left.enc_b': '', 'left.enc_invert': False,
     'right.enc_a': '', 'right.enc_b': '', 'right.enc_invert': False,
 
@@ -38,6 +39,13 @@ DEFAULTS = {
     'pid.min_duty': 0.0,
     'pid.max_duty': 100.0,
     'pid.i_limit': 30.0,              # integralin duty katkısı üst sınırı [%]
+
+    # Teker koruması: |duty| >= stall.duty iken ölçülen hız stall.time boyunca
+    # stall.speed altında kalırsa (enkoder susmuş/olay kaçırıyor ya da teker
+    # sıkışmış) iki motor da kesilir; komut sıfıra inince yeniden sürülebilir.
+    'stall.duty': 70.0,               # [%]; 0: kapalı
+    'stall.speed': 0.03,              # [m/s]
+    'stall.time': 0.5,                # [s]
 
     'odom_frame': 'odom',
     'base_frame': 'base_link',
