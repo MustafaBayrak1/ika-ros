@@ -50,6 +50,55 @@ def test_closed_loop_converges_on_simple_motor():
     assert speed == pytest.approx(0.3, abs=0.01)
 
 
+
+@pytest.mark.parametrize('gain', [0.6, 0.7])
+def test_closed_loop_converges_when_motor_is_stronger_than_feedforward(gain):
+    # Havada / hafif yükte motor ileri beslemenin varsaydığından hızlı döner:
+    # integral negatife inip hızı hedefe çekebilmeli (eskiden sıfırlanıyordu).
+    pid = WheelSpeedController(60, 300, 1.0, 0.5, i_limit=60.0)
+    speed = 0.0
+    for _ in range(500):
+        duty = pid.update(0.3, speed, 0.02)
+        speed += (duty / 100 * gain - speed) * 0.2
+    assert speed == pytest.approx(0.3, abs=0.01)
+    assert pid.integral < 0.0
+
+
+def test_two_different_motors_reach_the_same_speed():
+    # Aynı hedefte farklı güçteki iki motor (sağ %20 güçlü) eşit hıza oturmalı.
+    pids = [WheelSpeedController(60, 300, 1.0, 0.88, i_limit=60.0) for _ in range(2)]
+    gains = [0.88, 1.06]
+    speeds = [0.0, 0.0]
+    for _ in range(500):
+        for i in range(2):
+            duty = pids[i].update(0.4, speeds[i], 0.02)
+            speeds[i] += (duty / 100 * gains[i] - speeds[i]) * 0.2
+    assert speeds[0] == pytest.approx(0.4, abs=0.01)
+    assert speeds[1] == pytest.approx(0.4, abs=0.01)
+
+
+def test_integral_resets_only_when_target_direction_changes():
+    pid = WheelSpeedController(60, 300, 1.0, 0.5)
+    for _ in range(20):
+        pid.update(0.3, 0.4, 0.02)          # hedefin üstünde: integral negatif
+    assert pid.integral < 0.0
+    kept = pid.integral
+    pid.update(0.3, 0.4, 0.02)
+    assert pid.integral < kept              # sıfırlanmadı, birikmeye devam
+    pid.update(-0.3, -0.3, 0.02)            # geri vitese geçiş
+    assert pid.integral == 0.0
+
+
+def test_no_windup_while_held_at_min_duty():
+    # min_duty'nin verdiği hız hedeften büyükse duty min_duty'de kalır; integral
+    # sınırsız negatife gitmemeli, yük binince (hız düşünce) hemen toparlansın.
+    pid = WheelSpeedController(60, 300, 1.0, 0.88, min_duty=30.0, i_limit=60.0)
+    for _ in range(500):
+        duty = pid.update(0.15, 0.27, 0.02)
+    assert duty == pytest.approx(30.0)
+    assert pid.ki * pid.integral > -30.0
+
+
 def test_integral_authority_is_limited_when_measurement_drops():
     # Hız ölçümü 2 s sıfır kalır (pil çöktü / enkoder sustu): duty hedefin
     # gerektirdiği ileri beslemenin en fazla kp*hata + i_limit üstüne çıkar.

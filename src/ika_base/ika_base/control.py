@@ -50,23 +50,35 @@ class WheelSpeedController:
         self.max_duty = max_duty
         self.i_limit = i_limit
         self.integral = 0.0
+        self.direction = 0.0
 
     def reset(self):
         self.integral = 0.0
+        self.direction = 0.0
 
     def update(self, target: float, measured: float, dt: float) -> float:
         if abs(target) < 1e-4:
             self.reset()
             return 0.0
-        if self.integral != 0.0 and math.copysign(1.0, self.integral) != math.copysign(1.0, target):
-            # Yön değişti: eski yönde biriken integral yeni yönü frenlemesin.
+        direction = math.copysign(1.0, target)
+        if direction != self.direction:
+            # Hedefin yönü değişti: eski yönde biriken integral yeni yönü
+            # frenlemesin. (Integralin hedefe ters işaretli olması yön değişimi
+            # DEĞİLDİR: ileri beslemeden hızlı dönen teker için integral
+            # negatife iner; eskiden burada sıfırlanıyor, teker hedefin üstünde
+            # kalıyor ve iki teker farklı hızlarda dönüyordu.)
             self.reset()
+            self.direction = direction
 
         error = target - measured
         feedforward = self.kff * target / self.max_speed * 100.0
         unclamped = feedforward + self.kp * error + self.ki * (self.integral + error * dt)
-        saturated = abs(unclamped) >= self.max_duty
-        if not saturated or math.copysign(1.0, error) != math.copysign(1.0, unclamped):
+        # Anti-windup: duty bir sınıra dayanmışken hata onu aynı sınıra itiyorsa
+        # integrali büyütme (üstte max_duty; altta min_duty / boşa alma).
+        pushes_up = error * direction > 0.0
+        at_max = abs(unclamped) >= self.max_duty and pushes_up
+        at_min = (unclamped * direction < self.min_duty) and not pushes_up
+        if not (at_max or at_min):
             self.integral += error * dt
         if self.ki > 0.0:
             bound = self.i_limit / self.ki
